@@ -9,6 +9,7 @@ Files written:
   data/prices/<NAME>.csv  date, close, adj_close   SPY, QQQ, NSEI, GLD, GSPC
   data/vol/<NAME>.csv     date, close              VIX, VIX9D, VIX3M, VXN, INDIAVIX, GVZ
   data/cboe/<NAME>.csv    date, close              PUT, BXM (Cboe option-strategy benchmarks)
+  data/rates/IRX.csv      date, close              13-week US T-bill yield, in percent
   data/manifest.json      source, rows, first and last date of every series
 
 `close` is the raw closing price (adjusted for splits only): the price options
@@ -127,6 +128,8 @@ def main() -> None:
             df, src = from_yahoo(ticker, args.start), f"yahoo:{ticker}"
         record("cboe", name, df, src, False)
         time.sleep(2)
+
+    record("rates", "IRX", from_yahoo("^IRX", args.start), "yahoo:^IRX", False)
 
     (DATA / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     missing = [k for k, v in manifest["series"].items() if not v.get("source")]
