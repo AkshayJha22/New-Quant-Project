@@ -1,0 +1,89 @@
+{
+  "generated_utc": "2026-11-23 22:30",
+  "series": {
+    "prices/SPY": {
+      "source": "yahoo:SPY",
+      "rows": 5760,
+      "first": "2004-01-02",
+      "last": "2026-11-23"
+    },
+    "prices/QQQ": {
+      "source": "yahoo:QQQ",
+      "rows": 5760,
+      "first": "2004-01-02",
+      "last": "2026-11-23"
+    },
+    "prices/NSEI": {
+      "source": "yahoo:^NSEI",
+      "rows": 4705,
+      "first": "2007-09-17",
+      "last": "2026-11-20"
+    },
+    "prices/GLD": {
+      "source": "yahoo:GLD",
+      "rows": 5538,
+      "first": "2004-11-18",
+      "last": "2026-11-23"
+    },
+    "prices/GSPC": {
+      "source": "yahoo:^GSPC",
+      "rows": 5760,
+      "first": "2004-01-02",
+      "last": "2026-11-23"
+    },
+    "vol/VIX": {
+      "source": "cboe:VIX",
+      "rows": 5793,
+      "first": "2004-01-02",
+      "last": "2026-11-20"
+    },
+    "vol/VIX9D": {
+      "source": "cboe:VIX9D",
+      "rows": 3995,
+      "first": "2011-01-04",
+      "last": "2026-11-20"
+    },
+    "vol/VIX3M": {
+      "source": "cboe:VIX3M",
+      "rows": 4321,
+      "first": "2009-09-18",
+      "last": "2026-11-20"
+    },
+    "vol/VXN": {
+      "source": "cboe:VXN",
+      "rows": 4327,
+      "first": "2009-09-14",
+      "last": "2026-11-20"
+    },
+    "vol/INDIAVIX": {
+      "source": "yahoo:^INDIAVIX",
+      "rows": 4586,
+      "first": "2008-03-03",
+      "last": "2026-11-20"
+    },
+    "vol/GVZ": {
+      "source": "cboe:GVZ",
+      "rows": 4319,
+      "first": "2009-09-18",
+      "last": "2026-11-20"
+    },
+    "cboe/PUT": {
+      "source": "cboe:PUT",
+      "rows": 5005,
+      "first": "2004-03-16",
+      "last": "2026-11-20"
+    },
+    "cboe/BXM": {
+      "source": "cboe:BXM",
+      "rows": 5756,
+      "first": "2004-01-02",
+      "last": "2026-11-20"
+    },
+    "rates/IRX": {
+      "source": "yahoo:^IRX",
+      "rows": 5755,
+      "first": "2004-01-02",
+      "last": "2026-11-23"
+    }
+  }
+}
