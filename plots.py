@@ -1,5 +1,5 @@
 """
-plots.py — every chart in the app, built on one shared dark theme.
+plots.py: every chart in the app, built on one shared dark theme.
 
 Colour language (kept consistent across all figures so the dashboard reads
 as one system, not thirteen unrelated charts):
@@ -39,7 +39,7 @@ def _theme(fig: go.Figure, height: int = 420, legend_top: bool = True) -> go.Fig
         height=height, margin=dict(l=10, r=10, t=48, b=10),
         hovermode="x unified",
         hoverlabel=dict(bgcolor="#182230", bordercolor=GRID),
-        legend=(dict(orientation="h", yanchor="bottom", y=1.02, x=0)
+        legend=(dict(orientation="h", yanchor="bottom", y=1.02, x=1, xanchor="right")
                 if legend_top else dict()),
     )
     fig.update_xaxes(gridcolor=GRID, zerolinecolor=GRID, linecolor=GRID)
@@ -53,12 +53,12 @@ def _theme(fig: go.Figure, height: int = 420, legend_top: bool = True) -> go.Fig
 
 def fig_equity(daily: pd.DataFrame, log: bool = False) -> go.Figure:
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=daily.index, y=daily["bench"], name="Buy & hold",
+    fig.add_trace(go.Scatter(x=daily.index, y=daily["bench"], name="Buy & hold (total return)",
                              line=dict(color=SLATE, width=1.4, dash="dot")))
     fig.add_trace(go.Scatter(x=daily.index, y=daily["equity"], name="Strategy",
                              line=dict(color=TEAL, width=2.2),
                              fill="tozeroy", fillcolor="rgba(63,208,182,0.06)"))
-    fig.update_layout(title="Equity curve — strategy vs buy & hold",
+    fig.update_layout(title="Equity curve: strategy vs buy and hold",
                       yaxis_title="Account value ($)")
     if log:
         fig.update_yaxes(type="log")
@@ -127,7 +127,7 @@ def fig_pnl_hist(trades: pd.DataFrame) -> go.Figure:
                       annotation_text=f"mean {x.mean():.0f}%",
                       annotation_font_color=SAND)
     fig.update_layout(
-        title=f"Trade PnL distribution (% of credit) — skew {skew:.2f}",
+        title=f"Trade P&L distribution (% of credit), skew {skew:.2f}",
         xaxis_title="PnL as % of credit received", yaxis_title="Trades",
         hovermode="closest")
     return _theme(fig, 380)
@@ -203,7 +203,7 @@ def fig_vrp_scatter(trades: pd.DataFrame) -> go.Figure:
             marker=dict(color=color, size=7, opacity=0.8)))
     share = float((x > y).mean()) if len(x) else float("nan")
     fig.update_layout(
-        title=f"Implied vs delivered vol — {share:.0%} of trades below the line "
+        title=f"Implied vs delivered vol: {share:.0%} of trades below the line "
               f"(premium was real)",
         xaxis_title="IV at entry (%)", yaxis_title="Realised vol over trade (%)",
         hovermode="closest")
@@ -224,7 +224,7 @@ def fig_rolling_vol(daily: pd.DataFrame, trades: pd.DataFrame) -> go.Figure:
                                  marker=dict(symbol="triangle-down", size=8,
                                              color=TEAL,
                                              line=dict(color=PLOT_BG, width=1))))
-    fig.update_layout(title="Volatility regime — implied vs realised",
+    fig.update_layout(title="Volatility regime: implied vs realised",
                       yaxis_title="Annualised vol (%)")
     return _theme(fig, 400)
 
@@ -260,7 +260,7 @@ def fig_payoff(curves: dict) -> go.Figure:
                                  marker=dict(color=TEXT, size=8, symbol="diamond"),
                                  hovertemplate=f"breakeven {bx:,.0f}<extra></extra>"))
     fig.update_layout(
-        title=f"Payoff per contract — {curves['label']}  "
+        title=f"Payoff per contract: {curves['label']}  "
               f"(net credit ${curves['credit_$']:,.0f})",
         xaxis_title="Underlying at expiry", yaxis_title="PnL per contract ($)",
         hovermode="x")
@@ -295,3 +295,25 @@ def fig_compare(curves: dict[str, pd.Series], bench: pd.Series) -> go.Figure:
     fig.update_layout(title="All strategies, same settings (indexed to 100)",
                       yaxis_title="Growth of 100")
     return _theme(fig, 460)
+
+
+# ---------------------------------------------------------------------------
+# Validation against Cboe indices
+# ---------------------------------------------------------------------------
+
+def fig_validation(curves: dict) -> go.Figure:
+    """Rebased growth of $1: each Cboe index against the flat and smile replications."""
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("Short put vs Cboe PUT",
+                                                        "Covered call vs Cboe BXM"))
+    style = {"index": dict(color=TEXT, width=2.0), "flat": dict(color=SAND, width=1.4),
+             "smile": dict(color=TEAL, width=1.4)}
+    for col, key in ((1, "PUT"), (2, "BXM")):
+        for label, s in curves.items():
+            if not label.startswith(key):
+                continue
+            kind = "index" if label.endswith("index") else label.split(", ")[1]
+            s = s.dropna()
+            fig.add_trace(go.Scatter(x=s.index, y=s / s.iloc[0], name=label,
+                                     line=style[kind]), row=1, col=col)
+    fig.update_yaxes(type="log", title_text="Growth of $1")
+    return _theme(fig, 440)

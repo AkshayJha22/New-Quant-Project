@@ -1,38 +1,72 @@
 """
-data_loader.py — market data access.
+data_loader.py: market data access.
 
-Two sources, one interface:
+Three sources, one interface (load_market):
 
-1. Live data via yfinance (daily closes, plus the matching CBOE/NSE vol
-   index where one exists, used as the implied-vol input).
-2. A fully offline synthetic market: geometric Brownian motion driven by a
-   mean-reverting stochastic volatility process with a leverage effect
-   (vol spikes when prices fall), plus a synthetic "vol index" quoted at a
-   premium to true vol. This keeps the app demo-able with no internet and
-   gives the smoke test a deterministic fixture.
+1. "Snapshot": CSVs committed under data/, downloaded on GitHub's runners by
+   .github/workflows/data.yml (scripts/fetch_data.py). Works offline and makes
+   every number in the README reproducible.
+2. "Live": Yahoo Finance via yfinance at runtime (needs internet).
+3. "Synthetic": an offline simulated market (geometric Brownian motion with
+   mean-reverting stochastic volatility and a leverage effect, plus a
+   synthetic vol index quoted at a premium to true vol). Used for the demo
+   and as a deterministic fixture for the tests.
 
-No Streamlit imports here — the module stays UI-free so it can be unit
-tested directly. Caching wrappers live in app.py.
+For every source the loader returns raw closes (the price options are written
+on), adjusted closes (dividends folded in, for the buy-and-hold benchmark),
+the volatility index (one 30-day series, or for SPY the VIX9D / VIX / VIX3M
+term structure keyed by tenor in days) and, where available, a risk-free
+rate series (13-week T-bill) for interest on cash.
+
+No Streamlit imports here, so the module can be unit tested directly. Caching
+wrappers live in app.py.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
+DATA_DIR = Path(__file__).resolve().parent / "data"
 SYNTH_TICKER = "__SYNTH__"
 
-# Display name -> config. vol_index=None means no listed vol index; the app
-# then falls back to trailing realised vol x a user-set multiplier.
+# Display name -> config. "snapshot" names files under data/prices; "vol" maps
+# tenor in days -> volatility index (snapshot file name, Yahoo ticker);
+# "rate" is the risk-free series, or None to use the constant from the sidebar.
 UNIVERSE: dict[str, dict] = {
-    "SPY — S&P 500 ETF":        {"ticker": "SPY",   "vol_index": "^VIX",      "q": 0.013},
-    "QQQ — Nasdaq-100 ETF":     {"ticker": "QQQ",   "vol_index": "^VXN",      "q": 0.006},
-    "NIFTY 50 (^NSEI)":         {"ticker": "^NSEI", "vol_index": "^INDIAVIX", "q": 0.012},
-    "GLD — Gold ETF":           {"ticker": "GLD",   "vol_index": "^GVZ",      "q": 0.000},
-    "Demo — synthetic market (offline)":
-                                {"ticker": SYNTH_TICKER, "vol_index": SYNTH_TICKER, "q": 0.000},
-    "Custom ticker…":           {"ticker": None,    "vol_index": None,        "q": 0.000},
+    "SPY: S&P 500 ETF": {
+        "ticker": "SPY", "snapshot": "SPY", "q": 0.013, "r": 0.04, "skew": True,
+        "vol": {9: ("VIX9D", "^VIX9D"), 30: ("VIX", "^VIX"), 93: ("VIX3M", "^VIX3M")},
+        "rate": ("IRX", "^IRX")},
+    "QQQ: Nasdaq-100 ETF": {
+        "ticker": "QQQ", "snapshot": "QQQ", "q": 0.006, "r": 0.04, "skew": True,
+        "vol": {30: ("VXN", "^VXN")}, "rate": ("IRX", "^IRX")},
+    "NIFTY 50 (^NSEI)": {
+        "ticker": "^NSEI", "snapshot": "NSEI", "q": 0.012, "r": 0.065, "skew": True,
+        "vol": {30: ("INDIAVIX", "^INDIAVIX")}, "rate": None},
+    "GLD: Gold ETF": {
+        "ticker": "GLD", "snapshot": "GLD", "q": 0.000, "r": 0.04, "skew": False,
+        "vol": {30: ("GVZ", "^GVZ")}, "rate": ("IRX", "^IRX")},
+    "Demo: synthetic market (offline)": {
+        "ticker": SYNTH_TICKER, "snapshot": None, "q": 0.000, "r": 0.04, "skew": True,
+        "vol": {30: ("SYNTH", SYNTH_TICKER)}, "rate": None},
+    "Custom ticker...": {
+        "ticker": None, "snapshot": None, "q": 0.000, "r": 0.04, "skew": False,
+        "vol": {}, "rate": None},
 }
+
+
+@dataclass
+class Market:
+    close: pd.Series                     # raw closes: what options are written on
+    adj_close: pd.Series                 # total-return closes: the benchmark
+    vol: pd.Series | pd.DataFrame | None  # decimals; DataFrame columns = tenor days
+    rate: pd.Series | None               # annualised decimals, or None
+    source: str                          # "snapshot" | "live" | "synthetic"
+    notes: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -49,8 +83,7 @@ def synthetic_market(n_years: int = 15, seed: int = 7,
 
     rho < 0 is the leverage effect: sell-offs come with vol spikes, which is
     precisely what makes systematic option selling dangerous. The synthetic
-    vol index quotes at a ~10% premium to true instantaneous vol so the
-    demo exhibits a volatility risk premium by construction.
+    vol index quotes at a ~10% premium to true instantaneous vol.
     """
     rng = np.random.default_rng(seed)
     idx = pd.bdate_range(end=pd.Timestamp.today().normalize(),
@@ -84,7 +117,91 @@ def synthetic_market(n_years: int = 15, seed: int = 7,
 
 
 # ---------------------------------------------------------------------------
-# Live data
+# Snapshot (data/ committed in the repo)
+# ---------------------------------------------------------------------------
+
+def snapshot_available(name: str | None) -> bool:
+    return bool(name) and (DATA_DIR / "prices" / f"{name}.csv").exists()
+
+
+def _read_series(path: Path, col: str = "close") -> pd.Series:
+    df = pd.read_csv(path, parse_dates=["date"], index_col="date")
+    return df[col].astype(float).dropna()
+
+
+def load_snapshot_prices(name: str) -> tuple[pd.Series, pd.Series]:
+    df = pd.read_csv(DATA_DIR / "prices" / f"{name}.csv", parse_dates=["date"], index_col="date")
+    return df["close"].astype(float).dropna(), df["adj_close"].astype(float).dropna()
+
+
+def load_snapshot_series(group: str, name: str) -> pd.Series | None:
+    path = DATA_DIR / group / f"{name}.csv"
+    return _read_series(path) if path.exists() else None
+
+
+def build_vol(series_by_tenor: dict[int, pd.Series | None],
+              calendar: pd.DatetimeIndex) -> pd.Series | pd.DataFrame | None:
+    """
+    Align volatility-index series (in percent) to the price calendar, as
+    decimals. One tenor gives a Series. Several tenors give a DataFrame whose
+    gaps (for example VIX9D before 2011) are filled from the 30-day index.
+    """
+    aligned = {}
+    for tenor, s in series_by_tenor.items():
+        if s is None or s.notna().sum() < 50:
+            continue
+        aligned[tenor] = (s / 100.0).reindex(calendar.union(s.index)).sort_index().ffill().reindex(calendar)
+    if not aligned:
+        return None
+    if len(aligned) == 1 or 30 not in aligned:
+        return next(iter(aligned.values())) if 30 not in aligned else aligned[30]
+    frame = pd.DataFrame(aligned)
+    for tenor in frame.columns:
+        frame[tenor] = frame[tenor].fillna(frame[30])
+    return frame[sorted(frame.columns)]
+
+
+def load_market(uni_name: str, source: str = "snapshot", custom_ticker: str | None = None,
+                start=None, use_term_structure: bool = True) -> Market:
+    """
+    Load closes, volatility and rates for one universe entry.
+    source: "snapshot", "live" or "synthetic". A live failure raises
+    RuntimeError so the caller can fall back.
+    """
+    uni = UNIVERSE[uni_name]
+    if uni["ticker"] == SYNTH_TICKER or source == "synthetic":
+        price, iv = synthetic_market()
+        return Market(price, price, iv, None, "synthetic")
+
+    vol_map = dict(uni["vol"])
+    if not use_term_structure and 30 in vol_map:
+        vol_map = {30: vol_map[30]}
+
+    if source == "snapshot" and snapshot_available(uni["snapshot"]):
+        close, adj = load_snapshot_prices(uni["snapshot"])
+        vols = {t: load_snapshot_series("vol", name) for t, (name, _) in vol_map.items()}
+        vol = build_vol(vols, close.index)
+        rate = None
+        if uni["rate"]:
+            irx = load_snapshot_series("rates", uni["rate"][0])
+            if irx is not None:
+                rate = (irx / 100.0).reindex(close.index.union(irx.index)).sort_index().ffill().reindex(close.index)
+        return Market(close, adj, vol, rate, "snapshot")
+
+    ticker = custom_ticker if uni["ticker"] is None else uni["ticker"]
+    close, adj = fetch_prices(ticker, start=start)
+    vols = {t: fetch_series(yahoo) for t, (_, yahoo) in vol_map.items()}
+    vol = build_vol(vols, close.index)
+    rate = None
+    if uni["rate"]:
+        irx = fetch_series(uni["rate"][1])
+        if irx is not None:
+            rate = (irx / 100.0).reindex(close.index.union(irx.index)).sort_index().ffill().reindex(close.index)
+    return Market(close, adj, vol, rate, "live")
+
+
+# ---------------------------------------------------------------------------
+# Live data (Yahoo Finance)
 # ---------------------------------------------------------------------------
 
 def _flatten(df: pd.DataFrame) -> pd.DataFrame:
@@ -95,51 +212,36 @@ def _flatten(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def fetch_prices(ticker: str, start=None, end=None) -> pd.Series:
+def fetch_prices(ticker: str, start=None, end=None) -> tuple[pd.Series, pd.Series]:
     """
-    Daily adjusted closes as a float Series indexed by date.
-    Raises RuntimeError if nothing comes back — the app catches this and
-    offers the synthetic market instead of dying.
+    Raw and dividend-adjusted daily closes. Raises RuntimeError if nothing
+    comes back; the app catches it and falls back to the snapshot or the
+    synthetic market.
     """
-    if ticker == SYNTH_TICKER:
-        price, _ = synthetic_market()
-        return price
-
     import yfinance as yf
-    df = yf.download(ticker, start=start, end=end,
-                     auto_adjust=True, progress=False)
+    df = yf.download(ticker, start=start, end=end, auto_adjust=False, progress=False)
     if df is None or len(df) == 0:
         raise RuntimeError(f"No price data returned for {ticker!r}.")
     df = _flatten(df)
     close = df["Close"].dropna().astype(float)
-    close.name = ticker
-    close.index = pd.DatetimeIndex(close.index).tz_localize(None)
-    return close
+    adj = df["Adj Close"].dropna().astype(float) if "Adj Close" in df.columns else close
+    for s in (close, adj):
+        s.index = pd.DatetimeIndex(s.index).tz_localize(None)
+        s.name = ticker
+    return close, adj
 
 
-def fetch_vol_index(vol_ticker: str | None,
-                    price_index: pd.DatetimeIndex) -> pd.Series | None:
-    """
-    Vol index as a decimal (VIX 20 -> 0.20), forward-filled onto the price
-    calendar. Returns None when unavailable so the caller can fall back to
-    realised vol.
-    """
-    if vol_ticker is None:
+def fetch_series(ticker: str | None) -> pd.Series | None:
+    """A Yahoo series of closes (for example a vol index in percent), or None."""
+    if ticker is None:
         return None
-    if vol_ticker == SYNTH_TICKER:
-        _, iv = synthetic_market()
-        return iv.reindex(price_index).ffill()
-
-    import yfinance as yf
     try:
-        df = yf.download(vol_ticker, start=price_index[0], end=None,
-                         auto_adjust=True, progress=False)
+        import yfinance as yf
+        df = yf.download(ticker, start="2004-01-01", auto_adjust=False, progress=False)
         if df is None or len(df) == 0:
             return None
-        df = _flatten(df)
-        iv = (df["Close"].dropna().astype(float) / 100.0)
-        iv.index = pd.DatetimeIndex(iv.index).tz_localize(None)
-        iv = iv.reindex(price_index).ffill()
-        return iv if iv.notna().sum() > 50 else None
+        s = _flatten(df)["Close"].dropna().astype(float)
+        s.index = pd.DatetimeIndex(s.index).tz_localize(None)
+        return s if s.notna().sum() > 50 else None
     except Exception:
         return None

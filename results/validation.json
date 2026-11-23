@@ -1,0 +1,59 @@
+{
+  "period": "2007-01-03 to 2026-11-20",
+  "dividend_yield_used": 0.018104610318967745,
+  "assumptions": "Monthly (30-day) at-the-money options on ^GSPC, held to expiry, no costs, 100% notional, cash at the 13-week T-bill. Flat: VIX prices every strike. Smile: ATM vol backed out of the VIX through pricing.EQUITY_INDEX_SKEW.",
+  "results": {
+    "PUT model, flat": {
+      "model_cagr": 0.13014669247878885,
+      "index_cagr": 0.06843135219314367,
+      "cagr_gap": 0.06171534028564518,
+      "monthly_corr": 0.8657010141675315,
+      "tracking_error": 0.0546908128497958,
+      "mean_monthly_gap": 0.004671969867220073,
+      "model_max_dd": -0.3292116294490465,
+      "index_max_dd": -0.3709404863646958,
+      "model_vol": 0.10150330761912853,
+      "index_vol": 0.10810927654225393,
+      "months": 238
+    },
+    "PUT model, smile": {
+      "model_cagr": 0.08039605074302547,
+      "index_cagr": 0.06843135219314367,
+      "cagr_gap": 0.011964698549881803,
+      "monthly_corr": 0.864488359986792,
+      "tracking_error": 0.0547307553095216,
+      "mean_monthly_gap": 0.0008825505034618545,
+      "model_max_dd": -0.37071721833519755,
+      "index_max_dd": -0.3709404863646958,
+      "model_vol": 0.0999756562325946,
+      "index_vol": 0.10810927654225393,
+      "months": 238
+    },
+    "BXM model, flat": {
+      "model_cagr": 0.13019197600504206,
+      "index_cagr": 0.05546545582312912,
+      "cagr_gap": 0.07472652018191295,
+      "monthly_corr": 0.8613248512102183,
+      "tracking_error": 0.05670499818439996,
+      "mean_monthly_gap": 0.005676942296149005,
+      "model_max_dd": -0.32902354414504864,
+      "index_max_dd": -0.4014429510676675,
+      "model_vol": 0.10155271778903877,
+      "index_vol": 0.11099608100590136,
+      "months": 238
+    },
+    "BXM model, smile": {
+      "model_cagr": 0.08043945648199213,
+      "index_cagr": 0.05546545582312912,
+      "cagr_gap": 0.024974000658863016,
+      "monthly_corr": 0.8575900714502157,
+      "tracking_error": 0.057293270689939134,
+      "mean_monthly_gap": 0.0018874950751614904,
+      "model_max_dd": -0.37018145651085277,
+      "index_max_dd": -0.4014429510676675,
+      "model_vol": 0.10002242559034619,
+      "index_vol": 0.11099608100590136,
+      "months": 238
+    }
+  }
+}

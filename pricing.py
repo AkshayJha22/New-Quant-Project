@@ -1,5 +1,5 @@
 """
-pricing.py — Black–Scholes pricing utilities (NumPy only, no SciPy).
+pricing.py: Black-Scholes pricing utilities (NumPy only, no SciPy).
 
 Everything here is vectorised: scalars, arrays and pandas objects all work.
 The normal CDF and inverse CDF are implemented directly so the project has
@@ -39,7 +39,7 @@ def norm_pdf(x):
 def norm_cdf(x):
     """
     Standard normal CDF via the Abramowitz & Stegun 26.2.17 rational
-    approximation. Absolute error < 7.5e-8 — more than enough for pricing.
+    approximation. Absolute error < 7.5e-8, more than enough for pricing.
     """
     x = np.asarray(x, dtype=float)
     ax = np.abs(x)
@@ -144,7 +144,7 @@ def bs_delta(S, K, T, sigma, r=0.0, q=0.0, kind="call"):
 
 def strike_from_delta(S, target_abs_delta, T, sigma, r=0.0, q=0.0, kind="call"):
     """
-    Closed-form strike for a target |delta| — inverts BS delta analytically.
+    Closed-form strike for a target |delta|: inverts BS delta analytically.
 
         call:  N(d1) = Δ · e^{qT}          →  d1 = Φ⁻¹(Δ e^{qT})
         put :  N(-d1) = |Δ| · e^{qT}       →  d1 = -Φ⁻¹(|Δ| e^{qT})
@@ -177,3 +177,183 @@ def realized_vol_over(prices) -> float:
     if len(logret) < 3:
         return float("nan")
     return float(logret.std() * np.sqrt(TRADING_DAYS))
+
+
+# ---------------------------------------------------------------------------
+# Volatility smile (optional) and volatility-index conversion
+# ---------------------------------------------------------------------------
+#
+# With the smile switched off, every strike is priced at one volatility, as in
+# the original engine, and nothing below is used.
+#
+# With it on, a strike's volatility is the at-the-money volatility times a
+# smile multiplier g(z), where z is the strike's distance from the forward in
+# at-the-money standard deviations:
+#
+#     z    = ln(K / F) / (atm_vol * sqrt(T)),       F = S * exp((r - q) T)
+#     g(z) = 1 + slope * z + curve * (sqrt(z^2 + tip^2) - tip)
+#
+# This is a smoothed "V": linear wings with a rounded tip at the money. A
+# negative slope makes downside strikes dearer than upside ones (equity skew).
+# Because z is measured in standard deviations, the smile keeps its shape in
+# delta terms when volatility moves (a sticky-delta assumption), and the
+# multiplier is bounded to [floor, cap] so far wings stay finite.
+#
+# A volatility index (VIX, VXN, India VIX, GVZ) is not at-the-money volatility:
+# it is the square root of the fair variance-swap rate, computed from a whole
+# strip of out-of-the-money options, so with skew it sits above ATM. When the
+# smile is on, the ATM volatility is chosen so the smile's variance-swap level
+# equals the index (atm_vol_from_index).
+
+from dataclasses import dataclass
+from functools import lru_cache
+
+
+@dataclass(frozen=True)
+class SkewParams:
+    slope: float
+    curve: float
+    tip: float
+    floor: float = 0.5
+    cap: float = 3.0
+
+
+# Fitted by least squares (scripts/calibrate_skew.py) to the 31-day SPY smile in
+# the option-chain snapshot of 23 Nov 2026 (data/spy_smile_2026-11-23.csv),
+# 117 out-of-the-money options with mid prices. At that day's ATM volatility of
+# 22.1% the fit gives: 25-delta put +4.2 vol points over ATM (market +4.8),
+# 25-delta call -3.0 (market -4.1), 10-delta put +10.9 (market +11.2), and a
+# variance-swap / ATM ratio of 1.20 (market 1.16). Equity indices use it;
+# gold (GLD) defaults to a flat smile.
+EQUITY_INDEX_SKEW = SkewParams(slope=-0.233, curve=0.082, tip=1.84)
+
+
+def smile_multiplier(z, p: SkewParams):
+    z = np.asarray(z, dtype=float)
+    g = 1.0 + p.slope * z + p.curve * (np.sqrt(z * z + p.tip * p.tip) - p.tip)
+    return np.clip(g, p.floor, p.cap)
+
+
+def smile_vol(S, K, T, atm_vol, r=0.0, q=0.0, params: SkewParams | None = None):
+    """Implied volatility at strike K. params=None gives a flat smile (atm_vol)."""
+    if params is None:
+        return np.asarray(atm_vol, dtype=float) * np.ones_like(np.asarray(K, dtype=float))
+    T_safe = np.maximum(np.asarray(T, dtype=float), 1e-12)
+    atm = np.maximum(np.asarray(atm_vol, dtype=float), 1e-9)
+    F = np.asarray(S, dtype=float) * np.exp((r - q) * T_safe)
+    z = np.log(np.asarray(K, dtype=float) / F) / (atm * np.sqrt(T_safe))
+    return atm * smile_multiplier(z, params)
+
+
+def smile_price(S, K, T, atm_vol, r=0.0, q=0.0, kind="call", params: SkewParams | None = None):
+    """Black-Scholes price with the strike's own smile volatility."""
+    return bs_price(S, K, T, smile_vol(S, K, T, atm_vol, r, q, params), r, q, kind)
+
+
+def smile_delta(S, K, T, atm_vol, r=0.0, q=0.0, kind="call", params: SkewParams | None = None):
+    """Delta at the strike's own smile volatility (sticky strike within the day)."""
+    return bs_delta(S, K, T, smile_vol(S, K, T, atm_vol, r, q, params), r, q, kind)
+
+
+def strike_from_delta_smile(S, target_abs_delta, T, atm_vol, r=0.0, q=0.0, kind="call",
+                            params: SkewParams | None = None) -> float:
+    """
+    Strike whose |delta|, computed at that strike's own smile volatility,
+    equals the target. Flat smile: the closed form above. With a smile there is
+    no closed form, so bisect on log-strike; |delta| is monotone in the strike
+    over the bracket (checked in tests/test_skew.py).
+    """
+    if params is None:
+        return strike_from_delta(S, target_abs_delta, T, atm_vol, r, q, kind)
+    T = max(float(T), 1e-9)
+    a = max(float(atm_vol), 1e-6) * np.sqrt(T)
+    F = float(S) * np.exp((r - q) * T)
+    lo, hi = (np.log(F) - 10 * a, np.log(F) + 2 * a) if kind == "put" \
+        else (np.log(F) - 2 * a, np.log(F) + 10 * a)
+    target = float(target_abs_delta)
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        d = abs(float(smile_delta(S, np.exp(mid), T, atm_vol, r, q, kind, params)))
+        # put: |delta| rises with the strike; call: |delta| falls with the strike
+        if (d < target) == (kind == "put"):
+            lo = mid
+        else:
+            hi = mid
+    return float(np.exp(0.5 * (lo + hi)))
+
+
+def _variance_swap_ratio_exact(a: float, p: SkewParams) -> float:
+    """
+    sqrt(fair variance) / ATM vol for one maturity, with a = atm_vol * sqrt(T).
+    Fair variance = (2/T) * integral of OTM option prices / K^2 dK (forward 1,
+    no discounting), the replication behind the VIX formula.
+    """
+    T = 1.0                                   # only a = atm_vol*sqrt(T) matters
+    atm = a
+    u = np.linspace(-14 * a, 14 * a, 6001)    # log-strikes around the forward
+    K = np.exp(u)
+    sig = smile_vol(1.0, K, T, atm, 0.0, 0.0, p)
+    srt = sig * np.sqrt(T)
+    d1 = (-u + 0.5 * srt * srt) / srt
+    d2 = d1 - srt
+    put = K * norm_cdf(-d2) - norm_cdf(-d1)
+    call = norm_cdf(d1) - K * norm_cdf(d2)
+    otm = np.where(K < 1.0, put, call)
+    var = 2.0 / T * np.trapezoid(otm / K, u)   # dK / K^2 = du / K
+    return float(np.sqrt(var) / atm)
+
+
+@lru_cache(maxsize=8)
+def _ratio_table(p: SkewParams) -> tuple[np.ndarray, np.ndarray]:
+    grid = np.exp(np.linspace(np.log(0.003), np.log(1.5), 60))
+    return grid, np.array([_variance_swap_ratio_exact(a, p) for a in grid])
+
+
+def variance_swap_ratio(atm_vol, T, params: SkewParams | None) -> float:
+    """Variance-swap volatility divided by ATM volatility (1 for a flat smile)."""
+    if params is None:
+        return 1.0
+    grid, ratio = _ratio_table(params)
+    a = float(np.clip(float(atm_vol) * np.sqrt(max(float(T), 1e-9)), grid[0], grid[-1]))
+    return float(np.interp(np.log(a), np.log(grid), ratio))
+
+
+def atm_vol_from_index(index_vol, T, params: SkewParams | None) -> float:
+    """
+    ATM volatility whose smile has a variance-swap level equal to the index.
+    Flat smile: the index itself. Fixed-point iteration; the ratio moves
+    slowly with the ATM level, so a few steps converge.
+    """
+    index_vol = float(index_vol)
+    if params is None or not np.isfinite(index_vol) or index_vol <= 0:
+        return index_vol
+    atm = index_vol / 1.2
+    for _ in range(8):
+        atm = index_vol / variance_swap_ratio(atm, T, params)
+    return float(atm)
+
+
+# ---------------------------------------------------------------------------
+# Volatility term structure
+# ---------------------------------------------------------------------------
+
+def index_vol_at(tenor_days, vols, days) -> float:
+    """
+    Interpolate volatility-index levels quoted at fixed tenors (in calendar
+    days, e.g. 9, 30 and 93 for VIX9D, VIX and VIX3M) at another maturity.
+    Linear in total variance (vol^2 * T) between tenors, flat in volatility
+    outside the quoted range. NaN tenors are ignored.
+    """
+    t = np.asarray(tenor_days, dtype=float)
+    v = np.asarray(vols, dtype=float)
+    ok = np.isfinite(v)
+    t, v = t[ok], v[ok]
+    if len(t) == 0:
+        return float("nan")
+    if len(t) == 1:
+        return float(v[0])
+    order = np.argsort(t)
+    t, v = t[order], v[order]
+    d = float(np.clip(days, t[0], t[-1]))
+    w = np.interp(d, t, v * v * t)            # total variance, linear in maturity
+    return float(np.sqrt(w / d))

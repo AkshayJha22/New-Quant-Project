@@ -1,5 +1,5 @@
 """
-metrics.py — performance statistics on equity curves and trade logs.
+metrics.py: performance statistics on equity curves and trade logs.
 
 All functions are pure (DataFrame/Series in, numbers out) so they can be
 tested without Streamlit and reused for the benchmark and the strategy-
@@ -19,8 +19,12 @@ def drawdown_series(equity: pd.Series) -> pd.Series:
     return equity / equity.cummax() - 1.0
 
 
-def perf_stats(equity: pd.Series, rf: float = 0.0) -> dict:
-    """Annualised performance statistics for an equity curve."""
+def perf_stats(equity: pd.Series, rf=0.0) -> dict:
+    """
+    Annualised performance statistics for an equity curve. rf is the
+    annualised risk-free rate used for Sharpe and Sortino: a constant, or a
+    Series aligned to the equity curve (for example the 13-week T-bill).
+    """
     rets = equity.pct_change().dropna()
     n_years = max(len(rets) / TRADING_DAYS, 1e-9)
 
@@ -28,7 +32,11 @@ def perf_stats(equity: pd.Series, rf: float = 0.0) -> dict:
     cagr = (equity.iloc[-1] / equity.iloc[0]) ** (1.0 / n_years) - 1.0
     ann_vol = rets.std() * np.sqrt(TRADING_DAYS)
 
-    excess = rets - rf / TRADING_DAYS
+    if isinstance(rf, pd.Series):
+        rf_daily = rf.reindex(rets.index).ffill().fillna(0.0) / TRADING_DAYS
+    else:
+        rf_daily = rf / TRADING_DAYS
+    excess = rets - rf_daily
     sharpe = excess.mean() / rets.std() * np.sqrt(TRADING_DAYS) if rets.std() > 0 else np.nan
     downside = rets[rets < 0].std()
     sortino = (excess.mean() * TRADING_DAYS / (downside * np.sqrt(TRADING_DAYS))
