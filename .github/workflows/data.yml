@@ -1,0 +1,26 @@
+name: data
+
+# Downloads the market-data snapshot on GitHub's runners, which can reach
+# Yahoo Finance and Cboe, and uploads it as a workflow artifact. The snapshot
+# under data/ is refreshed by downloading that artifact and committing it.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install yfinance pandas requests
+      - run: python scripts/fetch_data.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: market-data
+          path: data/
+          retention-days: 7
